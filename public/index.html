@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Node 文件管理器</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+
+      body {
+        margin: 0;
+        background: #f4f7fb;
+        color: #172033;
+      }
+
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 32px 20px 48px;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+      }
+
+      .card {
+        background: #fff;
+        border: 1px solid #dce4f0;
+        border-radius: 16px;
+        box-shadow: 0 16px 40px rgb(23 32 51 / 8%);
+        padding: 20px;
+      }
+
+      .toolbar,
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .toolbar {
+        margin-bottom: 16px;
+      }
+
+      button,
+      input::file-selector-button {
+        border: 0;
+        border-radius: 10px;
+        background: #2563eb;
+        color: #fff;
+        cursor: pointer;
+        font: inherit;
+        padding: 9px 14px;
+      }
+
+      button.secondary {
+        background: #e8edf7;
+        color: #24324a;
+      }
+
+      button.danger {
+        background: #dc2626;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      input[type="text"] {
+        min-width: 220px;
+        border: 1px solid #ccd6e5;
+        border-radius: 10px;
+        font: inherit;
+        padding: 8px 10px;
+      }
+
+      .breadcrumb {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 8px 0 18px;
+      }
+
+      .breadcrumb button {
+        background: transparent;
+        color: #2563eb;
+        padding: 0;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e4eaf3;
+        padding: 12px 8px;
+        text-align: left;
+      }
+
+      th {
+        color: #52627a;
+        font-size: 13px;
+        text-transform: uppercase;
+      }
+
+      tr:hover {
+        background: #f8fbff;
+      }
+
+      .name-button {
+        background: transparent;
+        color: #172033;
+        padding: 0;
+        text-align: left;
+      }
+
+      .muted {
+        color: #6b7a90;
+      }
+
+      .status {
+        min-height: 24px;
+        margin: 12px 0 0;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #0e1421;
+          color: #edf3ff;
+        }
+
+        .card {
+          background: #151d2d;
+          border-color: #273449;
+        }
+
+        input[type="text"] {
+          background: #0e1421;
+          border-color: #36445a;
+          color: #edf3ff;
+        }
+
+        .secondary,
+        button.secondary {
+          background: #273449;
+          color: #edf3ff;
+        }
+
+        th,
+        td {
+          border-color: #273449;
+        }
+
+        tr:hover {
+          background: #192235;
+        }
+
+        .name-button {
+          color: #edf3ff;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Node 文件管理器</h1>
+          <p class="muted">管理服务器本地 storage/uploads 目录中的文件。</p>
+        </div>
+        <button id="refreshButton" class="secondary">刷新</button>
+      </header>
+
+      <section class="card">
+        <div class="toolbar">
+          <input id="folderName" type="text" placeholder="新文件夹名称" />
+          <button id="createFolderButton">新建文件夹</button>
+          <input id="fileInput" type="file" multiple />
+          <button id="uploadButton">上传</button>
+        </div>
+
+        <nav id="breadcrumb" class="breadcrumb" aria-label="当前位置"></nav>
+
+        <table>
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>类型</th>
+              <th>大小</th>
+              <th>修改时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileRows"></tbody>
+        </table>
+
+        <p id="status" class="status muted"></p>
+      </section>
+    </main>
+
+    <script>
+      const state = {
+        path: "",
+        files: [],
+      };
+
+      const elements = {
+        breadcrumb: document.querySelector("#breadcrumb"),
+        createFolderButton: document.querySelector("#createFolderButton"),
+        fileInput: document.querySelector("#fileInput"),
+        fileRows: document.querySelector("#fileRows"),
+        folderName: document.querySelector("#folderName"),
+        refreshButton: document.querySelector("#refreshButton"),
+        status: document.querySelector("#status"),
+        uploadButton: document.querySelector("#uploadButton"),
+      };
+
+      function joinPath(base, name) {
+        return [base, name].filter(Boolean).join("/");
+      }
+
+      function formatSize(size) {
+        if (size === null || size === undefined) {
+          return "-";
+        }
+
+        const units = ["B", "KB", "MB", "GB"];
+        let value = size;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+          value /= 1024;
+          unitIndex += 1;
+        }
+
+        return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+      }
+
+      function setStatus(message, isError = false) {
+        elements.status.textContent = message;
+        elements.status.style.color = isError ? "#dc2626" : "";
+      }
+
+      async function requestJson(url, options) {
+        const response = await fetch(url, options);
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `请求失败：${response.status}`);
+        }
+
+        if (response.status === 204) {
+          return null;
+        }
+
+        return response.json();
+      }
+
+      function renderBreadcrumb() {
+        elements.breadcrumb.replaceChildren();
+        const rootButton = document.createElement("button");
+        rootButton.textContent = "根目录";
+        rootButton.addEventListener("click", () => loadFiles(""));
+        elements.breadcrumb.append(rootButton);
+
+        const parts = state.path.split("/").filter(Boolean);
+        parts.forEach((part, index) => {
+          elements.breadcrumb.append(" / ");
+          const button = document.createElement("button");
+          button.textContent = part;
+          button.addEventListener("click", () => loadFiles(parts.slice(0, index + 1).join("/")));
+          elements.breadcrumb.append(button);
+        });
+      }
+
+      function renderRows() {
+        elements.fileRows.replaceChildren();
+
+        if (state.path) {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td colspan="5">
+              <button class="name-button" type="button">.. 返回上级</button>
+            </td>
+          `;
+          row.querySelector("button").addEventListener("click", () => {
+            const parent = state.path.split("/").slice(0, -1).join("/");
+            loadFiles(parent);
+          });
+          elements.fileRows.append(row);
+        }
+
+        for (const file of state.files) {
+          const row = document.createElement("tr");
+          const nameCell = document.createElement("td");
+          const nameButton = document.createElement("button");
+          nameButton.className = "name-button";
+          nameButton.type = "button";
+          nameButton.textContent = `${file.type === "directory" ? "📁" : "📄"} ${file.name}`;
+          nameButton.addEventListener("click", () => {
+            if (file.type === "directory") {
+              loadFiles(file.path);
+            } else {
+              window.location.href = `/api/download?path=${encodeURIComponent(file.path)}`;
+            }
+          });
+          nameCell.append(nameButton);
+
+          const actions = document.createElement("td");
+          actions.className = "actions";
+
+          if (file.type === "file") {
+            const download = document.createElement("button");
+            download.className = "secondary";
+            download.textContent = "下载";
+            download.addEventListener("click", () => {
+              window.location.href = `/api/download?path=${encodeURIComponent(file.path)}`;
+            });
+            actions.append(download);
+          }
+
+          const rename = document.createElement("button");
+          rename.className = "secondary";
+          rename.textContent = "重命名";
+          rename.addEventListener("click", () => renameItem(file));
+          actions.append(rename);
+
+          const remove = document.createElement("button");
+          remove.className = "danger";
+          remove.textContent = "删除";
+          remove.addEventListener("click", () => deleteItem(file));
+          actions.append(remove);
+
+          row.append(
+            nameCell,
+            cell(file.type === "directory" ? "文件夹" : "文件"),
+            cell(formatSize(file.size)),
+            cell(new Date(file.modifiedAt).toLocaleString()),
+            actions,
+          );
+          elements.fileRows.append(row);
+        }
+
+        if (state.files.length === 0 && !state.path) {
+          const row = document.createElement("tr");
+          row.innerHTML = '<td colspan="5" class="muted">暂无文件，请上传文件或创建文件夹。</td>';
+          elements.fileRows.append(row);
+        }
+      }
+
+      function cell(text) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        return td;
+      }
+
+      async function loadFiles(path = state.path) {
+        try {
+          setStatus("加载中...");
+          const payload = await requestJson(`/api/files?path=${encodeURIComponent(path)}`);
+          state.path = payload.path;
+          state.files = payload.files;
+          renderBreadcrumb();
+          renderRows();
+          setStatus(`当前目录：/${state.path}`);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      async function createFolder() {
+        const name = elements.folderName.value.trim();
+        if (!name) {
+          setStatus("请输入文件夹名称。", true);
+          return;
+        }
+
+        try {
+          await requestJson("/api/directories", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: joinPath(state.path, name) }),
+          });
+          elements.folderName.value = "";
+          await loadFiles();
+          setStatus("文件夹已创建。");
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      async function uploadFiles() {
+        const files = [...elements.fileInput.files];
+        if (files.length === 0) {
+          setStatus("请选择要上传的文件。", true);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("path", state.path);
+        for (const file of files) {
+          formData.append("files", file);
+        }
+
+        try {
+          await requestJson("/api/upload", {
+            method: "POST",
+            body: formData,
+          });
+          elements.fileInput.value = "";
+          await loadFiles();
+          setStatus("上传完成。");
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      async function renameItem(file) {
+        const newName = prompt("请输入新名称", file.name);
+        if (!newName || newName === file.name) {
+          return;
+        }
+
+        try {
+          await requestJson("/api/files", {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: file.path, newName }),
+          });
+          await loadFiles();
+          setStatus("重命名完成。");
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      async function deleteItem(file) {
+        if (!confirm(`确定删除 ${file.name} 吗？`)) {
+          return;
+        }
+
+        try {
+          await requestJson(`/api/files?path=${encodeURIComponent(file.path)}`, {
+            method: "DELETE",
+          });
+          await loadFiles();
+          setStatus("删除完成。");
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      elements.createFolderButton.addEventListener("click", createFolder);
+      elements.refreshButton.addEventListener("click", () => loadFiles());
+      elements.uploadButton.addEventListener("click", uploadFiles);
+
+      loadFiles();
+    </script>
+  </body>
+</html>
